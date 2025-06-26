@@ -12,6 +12,20 @@ func NewHeaders() Headers {
 	return make(Headers)
 }
 
+func IsDisallowedChar(r rune) bool {
+	specialChars := "!#$%&'*+-.^_`|~"
+	for _, c := range specialChars {
+		if c == r {
+			return false
+		}
+	}
+
+	if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+		return false
+	}
+	return true
+}
+
 const crlf = "\r\n"
 
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {
@@ -33,6 +47,19 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	if len(headerParts) != 2 {
 		return 0, false, fmt.Errorf("invalid header: %s", headerText)
 	}
-	h[strings.TrimRight(headerParts[0], ":")] = strings.TrimSpace(headerParts[1])
+
+	key := strings.ToLower(strings.TrimRight(headerParts[0], ":"))
+	for _, c := range key {
+		if IsDisallowedChar(c) == true {
+			return 0, false, fmt.Errorf("invalid header key: %s", key)
+		}
+	}
+	value := strings.ToLower(strings.TrimSpace(headerParts[1]))
+	if h[key] != "" {
+		currentValue := h[key]
+		h[key] = currentValue + ", " + value
+		return byteCount, false, nil
+	}
+	h[key] = value
 	return byteCount, false, nil
 }
