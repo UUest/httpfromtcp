@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/UUest/httpfromtcp/internal/headers"
@@ -13,15 +14,18 @@ import (
 type ParserState int
 
 const (
-	StateInitialized    ParserState = 1
-	StateParsingHeaders ParserState = 2
-	StateDone           ParserState = 0
+	StateInitialized ParserState = iota
+	StateParsingHeaders
+	StateParsingBody
+	StateDone
 )
 
 type Request struct {
-	RequestLine RequestLine
-	Headers     headers.Headers
-	ParserState ParserState
+	RequestLine    RequestLine
+	Headers        headers.Headers
+	Body           []byte
+	ParserState    ParserState
+	bodyLengthRead int
 }
 
 type RequestLine struct {
@@ -32,13 +36,16 @@ type RequestLine struct {
 
 const crlf = "\r\n"
 const bufferSize = 8
+const contentLengthKey = "Content-Length"
 
 func RequestFromReader(reader io.Reader) (*Request, error) {
 	buf := make([]byte, bufferSize)
 	readToIndex := 0
 	req := Request{
-		ParserState: ParserState(StateInitialized),
-		Headers:     headers.NewHeaders(),
+		ParserState:    ParserState(StateInitialized),
+		Headers:        headers.NewHeaders(),
+		Body:           []byte{},
+		bodyLengthRead: 0,
 	}
 	for req.ParserState != StateDone {
 		if readToIndex >= len(buf) {
@@ -153,9 +160,29 @@ func (r *Request) parseSingle(data []byte) (int, error) {
 			return 0, err
 		}
 		if done {
-			r.ParserState = StateDone
+			r.ParserState = StateParsingBody
 		}
 		return bytesParsed, nil
+	case StateParsingBody:
+		contentL := r.Headers.Get(contentLengthKey)
+		if contentL == "" {
+			r.ParserState = StateDone
+			return 0, nil
+		}
+		contentLength, err := strconv.Atoi(contentL)
+		if err != nil {
+			return 0, err
+		}
+		r.Body = append(r.Body, data...)
+		r.bodyLengthRead += len(data)
+		if r.bodyLengthRead > contentLength {
+			return 0, fmt.Errorf("invalid body length, expected: %v, got: %v", contentLength, len(r.Body))
+		}
+		if r.bodyLengthRead == contentLength {
+			r.ParserState = StateDone
+		}
+		return len(data), nil
+
 	case StateDone:
 		return 0, fmt.Errorf("error: trying to read data in a done state")
 	default:

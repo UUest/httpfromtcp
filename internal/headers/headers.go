@@ -34,7 +34,7 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 		return 0, false, nil
 	}
 	if idx == 0 {
-		return idx + len(crlf), true, nil
+		return 2, true, nil
 	}
 	byteCount := idx + len(crlf)
 	headerText := string(data[:idx])
@@ -62,4 +62,8 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
 	}
 	h[key] = value
 	return byteCount, false, nil
+}
+
+func (h Headers) Get(key string) string {
+	return h[strings.ToLower(key)]
 }
