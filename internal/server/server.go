@@ -1,9 +1,7 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync/atomic"
@@ -11,6 +9,8 @@ import (
 	"github.com/UUest/httpfromtcp/internal/request"
 	"github.com/UUest/httpfromtcp/internal/response"
 )
+
+type Handler func(w *response.Writer, req *request.Request)
 
 type Server struct {
 	listener net.Listener
@@ -32,11 +32,10 @@ func Serve(port int, handler Handler) (*Server, error) {
 }
 
 func (s *Server) Close() error {
-	err := s.listener.Close()
-	if err != nil {
-		return err
-	}
 	s.closed.Store(true)
+	if s.listener != nil {
+		return s.listener.Close()
+	}
 	return nil
 }
 
@@ -56,32 +55,14 @@ func (s *Server) Listen() {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
+	w := response.NewWriter(conn)
 	req, err := request.RequestFromReader(conn)
 	if err != nil {
-		log.Printf("Error parsing request: %v", err)
+		w.WriteStatusLine(response.StatusCodeBadRequest)
+		body := []byte(fmt.Sprintf("Error parsing request: %v", err))
+		w.WriteHeaders(response.GetDefaultHeaders(len(body)))
+		w.WriteBody(body)
 		return
 	}
-	buff := bytes.NewBuffer(make([]byte, 0, 1024))
-	he := s.handler(buff, req)
-	if he != nil {
-		WriteHandlerError(conn, he)
-		return
-	}
-	defaultHeaders := response.GetDefaultHeaders(len(buff.Bytes()))
-	response.WriteStatusLine(conn, response.StatusCode(response.OK))
-	response.WriteHeaders(conn, defaultHeaders)
-	conn.Write(buff.Bytes())
-}
-
-type Handler func(w io.Writer, req *request.Request) *HandlerError
-
-type HandlerError struct {
-	StatusCode int
-	Message    string
-}
-
-func WriteHandlerError(w io.Writer, he *HandlerError) {
-	response.WriteStatusLine(w, response.StatusCode(he.StatusCode))
-	response.WriteHeaders(w, response.GetDefaultHeaders(len(he.Message)))
-	w.Write([]byte(he.Message))
+	s.handler(w, req)
 }
