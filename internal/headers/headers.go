@@ -85,3 +85,8 @@ func isTokenChar(c byte) bool {
 
 	return slices.Contains(tokenChars, c)
 }
+
+func (h Headers) Remove(key string) {
+	key = strings.ToLower(key)
+	delete(h, key)
+}

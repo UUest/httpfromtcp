@@ -1,11 +1,18 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"github.com/UUest/httpfromtcp/internal/headers"
 	"github.com/UUest/httpfromtcp/internal/request"
 	"github.com/UUest/httpfromtcp/internal/response"
 	"github.com/UUest/httpfromtcp/internal/server"
@@ -34,6 +41,10 @@ func handler(w *response.Writer, req *request.Request) {
 	}
 	if req.RequestLine.RequestTarget == "/myproblem" {
 		handler500(w, req)
+		return
+	}
+	if strings.HasPrefix(req.RequestLine.RequestTarget, "/httpbin") {
+		handlerProxy(w, req)
 		return
 	}
 	handler200(w, req)
@@ -91,4 +102,57 @@ func handler200(w *response.Writer, _ *request.Request) {
 	h.Override("Content-Type", "text/html")
 	w.WriteHeaders(h)
 	w.WriteBody(body)
+}
+
+func handlerProxy(w *response.Writer, r *request.Request) {
+	target := strings.TrimPrefix(r.RequestLine.RequestTarget, "/httpbin/")
+	targetUrl := "https://httpbin.org/" + target
+	resp, err := http.Get(targetUrl)
+	if err != nil {
+		handler500(w, r)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.WriteStatusLine(response.StatusCodeSuccess)
+	h := response.GetDefaultHeaders(0)
+	h.Override("Transfer-Encoding", "chunked")
+	h.Set("Trailer", "X-Content-SHA256")
+	h.Set("Trailer", "X-Content-Length")
+	h.Remove("Content-Length")
+	w.WriteHeaders(h)
+
+	const maxChunkSize = 1024
+	var fullBody []byte
+	buffer := make([]byte, maxChunkSize)
+	for {
+		n, err := resp.Body.Read(buffer)
+		fmt.Println("Read", n, "bytes")
+		if n > 0 {
+			_, err = w.WriteChunkedBody(buffer[:n])
+			if err != nil {
+				fmt.Println("Error writing chunked body:", err)
+				break
+			}
+			fullBody = append(fullBody, buffer[:n]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Println("Error reading response body:", err)
+			break
+		}
+	}
+	_, err = w.WriteChunkedBodyDone()
+	if err != nil {
+		fmt.Println("Error writing chunked body done:", err)
+	}
+	sha := sha256.Sum256(fullBody)
+	shaTrailer := hex.EncodeToString(sha[:])
+	sizeTrailer := len(fullBody)
+	trailers := headers.NewHeaders()
+	trailers["X-Content-SHA256"] = shaTrailer
+	trailers["X-Content-Length"] = fmt.Sprintf("%d", sizeTrailer)
+	w.WriteTrailers(trailers)
 }
